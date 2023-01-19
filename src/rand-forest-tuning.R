@@ -62,9 +62,15 @@ autoplot(rf_bayes)
 show_best(rf_bayes,
           metric = 'roc_auc')
 
-rf_bayes_butchered <- rf_bayes %>%
-  # butcher(verbose = TRUE) %>%
-  bundle()
+rf_best_fit_params <- select_best(rf_bayes,
+                                     metric = 'roc_auc')
 
-saveRDS(rf_bayes_butchered,
-        'data/interim/rf_bayes_tune.RDS')
+rf_final_wf <- rf_wf %>%
+  finalize_workflow(rf_best_fit_params)
+
+rf_final_fit <- rf_final_wf %>%
+  fit(kdd_train2_ds_baked)
+
+saveRDS(rf_final_fit, 'models/tuning/rf_fit.RDS')
+
+rm(list = ls())

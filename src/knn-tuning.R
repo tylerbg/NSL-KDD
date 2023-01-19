@@ -64,10 +64,15 @@ autoplot(knn_bayes)
 show_best(knn_bayes,
           metric = 'roc_auc')
 
-knn_bayes_bundled <- knn_bayes %>%
-  bundle()
+knn_best_fit_params <- select_best(knn_bayes,
+                                     metric = 'roc_auc')
 
-saveRDS(knn_bayes_bundled,
-        'models/tuning/knn_bayes_tune.RDS')
+knn_final_wf <- knn_wf %>%
+  finalize_workflow(knn_best_fit_params)
 
+knn_final_fit <- knn_final_wf %>%
+  fit(kdd_train2_ds_baked)
 
+saveRDS(knn_final_fit, 'models/tuning/knn_fit.RDS')
+
+rm(list = ls())

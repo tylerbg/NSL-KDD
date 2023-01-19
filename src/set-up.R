@@ -4,7 +4,8 @@ setwd("~/NSL-KDD")
 
 # Install all of the packages used in this analysis if not already installed
 libs <- c('tidyverse', 'tidymodels', 'butcher', 'stacks', 'bundle', 'ranger', 'xgboost', 'kknn',
-          'baguette', 'finetune', 'doParallel', 'rules', 'naivebayes', 'dbarts', 'rpart', 'discrim')
+          'baguette', 'finetune', 'doParallel', 'rules', 'naivebayes', 'dbarts', 'rpart', 'discrim',
+          'glmnet', 'LiblineaR', 'mda')
 
 n_cores <- parallel::detectCores()
 
@@ -140,5 +141,3 @@ saveRDS(kdd_train, 'data/interim/kdd_train.RDS')
 saveRDS(kdd_train_ds, 'data/interim/kdd_train_ds.RDS')
 saveRDS(kdd_val, 'data/interim/kdd_val.RDS')
 saveRDS(kdd_test, 'data/interim/kdd_test.RDS')
-
-
