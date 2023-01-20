@@ -1,0 +1,191 @@
+---
+title: "Feature engineering"
+author: "Tyler Garner"
+output: html_document
+editor_options: 
+  chunk_output_type: console
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+
+setwd("~/NSL-KDD")
+```
+
+
+
+```{r}
+library(tidyverse)
+library(tidymodels)
+```
+
+
+
+```{r}
+kdd_train <- readRDS('data/interim/kdd_train.RDS')
+
+set.seed(4960)
+kdd_train_val_split <- initial_split(kdd_train,
+                                     prop = 4/5)
+
+kdd_train <- training(kdd_train_val_split)
+kdd_val <- testing(kdd_train_val_split)
+```
+
+
+
+```{r}
+# Write a function for down sampling of select categories based on the size of one category
+down_sample <- function (df, col, cats, ref_cat, samp_factor) {
+  ds_df <- df
+  
+  for (ii in cats) {
+    if (sum(ds_df[, col] == ii) > sum(ds_df[, col] == ref_cat) * samp_factor) {
+      ds_df <- ds_df[-sample(which(ds_df[, col] == ii),
+                               sum(ds_df[, col] == ii) -
+                                 samp_factor * sum(ds_df[, col] == ref_cat)), ]
+    }
+  }
+  
+  return(ds_df)
+}
+
+# Set down sampling factor
+samp_factor <- 50
+
+# Run the function to downsample
+set.seed(4960)
+kdd_train_ds <- down_sample(kdd_train,
+            'Class',
+            c('Normal', 'DoS', 'Probe', 'R2L'),
+            'U2R',
+            samp_factor)
+
+summary(kdd_train_ds$Class)
+```
+
+
+
+```{r}
+# Add weight to the downsample classes so that:
+# Example weight = original weight * downsampling factor
+n_samples <- nrow(kdd_train_ds)
+n_classes <- length(unique(kdd_train_ds$Class))
+case_wts <- kdd_train_ds %>%
+  group_by(Class) %>%
+  summarize(n_samples_j = n(),
+            case_wts = n_samples / (n_classes * n_samples_j))
+
+smpl_wts <- sapply(case_wts$Class,
+                   function (x) sum(kdd_train$Class == x) / sum(kdd_train_ds$Class == x))
+
+case_wts <- case_wts %>%
+  mutate(case_wts = case_wts * smpl_wts)
+
+kdd_train_ds <- kdd_train_ds %>%
+  left_join(case_wts %>%
+              select(!n_samples_j),
+            by = 'Class') %>%
+  mutate(case_wts = importance_weights(case_wts))
+```
+
+
+
+
+```{r}
+kdd_featEng_recipe <- kdd_train_ds %>%
+  recipe(Class ~ .) %>%
+  # Remove non-predictor vars
+  step_rm('Difficulty.Level', 'Subclass') %>%
+  # Pool infrequently occurring values in nominal pred vars (less than 5% of total)
+  step_other(all_nominal_predictors(),
+             threshold = 0.05,
+             other = 'step_other') %>%
+  # Create natural spline expansions of select vars with a df of 10
+  step_ns(Duration, Src.Bytes, Dst.Bytes, Num.Compromised, Num.Root, Count, Srv.Count,
+          deg_free = 10) %>%
+  # Make dummy vars for the nominal preds but keep the original vars
+  step_dummy(all_nominal_predictors(),
+             one_hot = TRUE) %>%
+  # Add interactions for all pred vars
+  step_interact(~ all_predictors():all_predictors(),
+                sep = ':') %>%
+  # Remove pred vars with zero variance
+  step_zv(all_numeric_predictors()) %>%
+  # Transform select vars using Yeo-Johnson transform
+  step_YeoJohnson(all_numeric_predictors())
+```
+
+An ensemble of boosted decision trees will be used to identify variables to use in future models based on their "importance" scores.  The boosted tree approach reduces bias which can be an issue when undersampling imbalanced data as done here.
+
+```{r}
+n_cores <- parallel::detectCores()
+
+bt_model <- boost_tree(mode = 'classification',
+                       mtry = 300,
+                       trees = 200,
+                       min_n = 2,
+                       tree_depth = 10,
+                       learn_rate = 0.2) %>%
+  set_engine('xgboost',
+             nthread = n_cores) %>%
+  translate()
+
+bt_wf <- workflow() %>%
+  add_model(bt_model) %>%
+  add_recipe(kdd_featEng_recipe) %>%
+  add_case_weights(case_wts)
+
+set.seed(4960)
+bt_fit <- bt_wf %>%
+  fit(kdd_train_ds)
+
+bt_probs <- predict(bt_fit,
+                    new_data = kdd_val,
+                    type = 'prob')
+
+bt_preds <- names(bt_probs)[max.col(bt_probs,
+                                    ties.method = "first")] %>%
+  str_remove('\\.pred_')
+
+class_levels <- c("Normal", "DoS", "Probe", "R2L", "U2R")
+
+bt_results <- bind_cols(bt_probs,
+                        pred = bt_preds,
+                        obs = kdd_val$Class) %>%
+  mutate(pred = fct_relevel(pred, class_levels),
+         obs = fct_relevel(obs, class_levels))
+```
+
+
+
+```{r}
+bt_confmat <- table(observed = bt_results$obs,
+                    predicted = bt_results$pred)
+
+bt_confmat
+
+accuracy_vec(bt_results$obs,
+             bt_results$pred)
+
+recall_vec(bt_results$obs,
+             bt_results$pred)
+
+precision_vec(bt_results$obs,
+             bt_results$pred)
+```
+
+```{r}
+library(vip)
+
+bt_fit %>%
+  extract_fit_parsnip() %>%
+  vip(num_features = 20)
+
+# Select vars with at least 0.1% importance
+imp_vars <- bt_fit %>%
+  extract_fit_parsnip() %>%
+  vi() %>%
+  filter(Importance > 0.005)
+```
+

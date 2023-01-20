@@ -40,7 +40,7 @@ kdd <- rbind(kdd_train, kdd_test)
 colnames(kdd) <- kdd_features$`Feature Name` %>%
   str_replace_all('\\s', '.')
 
-# Get information on the training data
+# Get information on the data
 dim(kdd)
 head(kdd)
 summary(kdd)

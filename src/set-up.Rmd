@@ -1,0 +1,131 @@
+---
+title: "Prepare the NSL-KDD analysis"
+author: "Tyler Garner"
+output: html_document
+editor_options: 
+  chunk_output_type: console
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+
+setwd("~/NSL-KDD")
+```
+
+The NSL-KDD is a dataset for intrusion detection systems (IDS) and is a modified version of the KDD Cup 1999 data set.  The data set contains a mixture of both normal and intrusion connections which can be used as a benchmark for comparing intrusion methods.
+
+This analysis aims to utilize boosted tree feature selection with ensemble modeling to predict network attacks using a smaller subset of the NSL-KDD data set for training.
+
+## Installing libraries
+
+The following code chunk will check wheter any of the packages used in this analysis are already installed and if not then install them.  The installation uses all computer cores which can be changed with the `n_cores` object.
+
+```{r install-libs}
+# List all of the libraries used in the analysis
+libs <- c('tidyverse', 'tidymodels', 'butcher', 'bundle', 'ranger', 'xgboost', 'kknn',
+          'baguette', 'finetune', 'doParallel', 'rules', 'naivebayes', 'dbarts', 'rpart', 'discrim',
+          'glmnet', 'LiblineaR', 'mda', 'corrplot')
+
+# Identify packages that are not already installed
+new.packages <- libs[!(libs %in% installed.packages()[, "Package"])]
+
+# Set the number of cores to use and install missing packages.
+n_cores <- parallel::detectCores()
+if (length(new.packages)) install.packages(new.packages,
+                                           Ncpus = n_cores)
+```
+
+## Prepare data set
+
+The NSL-KDD traning and testing sets will be laoded into `R` in addition to a .csv file that contains the variable names and their descriptions.  The `tidyverse` package will also be loaded to perform data manipulation.
+
+```{r load-data}
+library(tidyverse)
+library(tidymodels)
+
+kdd_train <- read_csv('data/raw/KDDTrain+.txt',
+                      col_names = FALSE,
+                      show_col_types = FALSE)
+
+kdd_test <- read_csv('data/raw/KDDTest+.txt',
+                     col_names = FALSE,
+                     show_col_types = FALSE)
+
+kdd_features <- read_csv('data/external/KDD-features.csv',
+                         show_col_types = FALSE)
+```
+
+The training and testing sets will be merged to create new training and testing sets, each with 50% of the total NSL-KDD data.  The variable names will then be added and white space replaced with more `R`-friendly dots (.).  The dimensions of the data set and summary statistics will then be computed.
+
+```{r data-merge}
+# Merge the train+ and test+ sets
+kdd <- rbind(kdd_train, kdd_test)
+
+# Replace whitespace in the column names with '.'
+# '.' used over '_' as step_dummy() uses '_' when creating dummy vars
+colnames(kdd) <- kdd_features$`Feature Name` %>%
+  str_replace_all('\\s', '.')
+
+dim(kdd)
+summary(kdd)
+```
+
+The full NSL-KDD data set contains 42 variables with 148,517 observations.  In the summary statistics there is obviously a range of different types of data where some variables are continues with potential extreme values, logical variables, and character variables.  For the variables of the `character` class it could be useful to change them to the `factor` type for processing and modeling.  The code block below counts the number of unique values for each character variable.
+
+```{r unique-char}
+# Count the number of unique observations for each character variable
+kdd %>%
+  select(where(is.character)) %>%
+  apply(2, function(x) length(unique(x)))
+```
+
+Because each of the above variables have a very low number of unique values compared to the total number of observations in the data set it is probably good to convert them to the `factor` class.
+
+```{r char-to-fac}
+# Convert all character variables to factors
+kdd <- kdd %>%
+  mutate(across(where(is.character), factor))
+```
+
+The *Class* column identifies whether a connection is normal (*Normal*) or some type of attack.  These intrusions can be generalized into 4 classes: denial of service (*DoS*), network vulnerability probing (*Probe*), remote to local (*R2L*), or user to root (*U2R*) attacks.  To reduce complexity and increase model performance these intrusions types will be grouped into their respective category.  The new variable will be labeled *Class* while the previous variable will be re-labeled to *Subclass*.
+
+```{r group-classes}
+# Create a new column that categorizes each sub-class into either DoS, Probe, U2R, or R2L
+dos_class <- c('apache2', 'back', 'land', 'neptune', 'mailbomb', 'pod', 'processtable', 'smurf',
+               'teardrop', 'udpstorm', 'worm')
+probe_class <- c('ipsweep', 'mscan', 'nmap', 'portsweep', 'saint', 'satan')
+u2r_class <- c('buffer_overflow', 'loadmodule', 'perl', 'ps', 'rootkit', 'sqlattack', 'xterm')
+# Any not included above are R2L
+
+# Rename the Class variable to Subclass then create a new variable that classifies connections as 
+# either normal or one of the 4 attack types
+kdd <- kdd %>%
+  rename(Subclass = 'Class') %>%
+  mutate(Class = case_when(Subclass == 'normal' ~ 'Normal',
+                           Subclass %in% dos_class ~ 'DoS',
+                           Subclass %in% probe_class ~ 'Probe',
+                           Subclass %in% u2r_class ~ 'U2R',
+                           TRUE ~ 'R2L')) %>%
+  # Level the Class variable so that Normal is first
+  mutate(Class = fct_relevel(Class, 'Normal'))
+```
+
+Next, the data will be split 50/50 into testing and training sets and both will be saved to the 'data/interim/' folder.
+
+```{r split-data}
+# Split training data for feature eng/selection
+set.seed(4960)
+kdd_train_test_split <- initial_split(kdd,
+                                      prop = 0.5,
+                                      strata = Class)
+
+kdd_train <- training(kdd_train_test_split)
+kdd_test <- testing(kdd_train_test_split)
+
+saveRDS(kdd_train,
+        'data/interim/kdd_train.RDS')
+saveRDS(kdd_test,
+        'data/interim/kdd_test.RDS')
+```
+
+The training set will next be explored.
