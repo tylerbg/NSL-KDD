@@ -122,7 +122,7 @@ An ensemble of boosted decision trees will be used to identify variables to use 
 n_cores <- parallel::detectCores()
 
 bt_model <- boost_tree(mode = 'classification',
-                       mtry = 300,
+                       mtry = 200,
                        trees = 200,
                        min_n = 2,
                        tree_depth = 10,
@@ -175,6 +175,8 @@ precision_vec(bt_results$obs,
              bt_results$pred)
 ```
 
+
+
 ```{r}
 library(vip)
 
@@ -186,6 +188,76 @@ bt_fit %>%
 imp_vars <- bt_fit %>%
   extract_fit_parsnip() %>%
   vi() %>%
-  filter(Importance > 0.005)
+  filter(Importance > 0.001)
+
+nrow(imp_vars)
+```
+
+
+
+```{r}
+# Write a formula of the important vars
+# This will be used to reduce the processing of baking data sets by limiting the number of interactions
+imp_vars_ints <- imp_vars$Variable[imp_vars$Variable %>%
+                                     str_detect(':')]
+
+imp_vars_ints_formula <- as.formula(paste('~ ', paste(imp_vars_ints, collapse = '+')))
+
+# Keep non-interaction, important vars to keep for later
+nonint_vars <- imp_vars$Variable[!imp_vars$Variable %>% str_detect(':')]
+```
+
+
+```{r}
+kdd_test <- readRDS('data/interim/kdd_test.RDS')
+
+kdd_model_recipe <- kdd_train_ds %>%
+  recipe(Class ~ .) %>%
+  # Remove non-predictor vars
+  step_rm('Difficulty.Level', 'Subclass') %>%
+  # Pool infrequently occurring values in nominal pred vars
+  step_other(all_nominal_predictors(),
+             threshold = 0.01,
+             other = 'step_other') %>%
+  # Create natural spline expansions of select vars with a df of 5
+  step_ns(Duration, Src.Bytes, Dst.Bytes, Num.Compromised, Num.Root, Count, Srv.Count,
+          deg_free = 10) %>%
+  # Make dummy vars for the nominal preds but keep the original vars
+  step_dummy(all_nominal_predictors(),
+             one_hot = TRUE) %>%
+  # Add interactions identified by importance
+  step_interact(imp_vars_ints_formula,
+                sep = ':') %>%
+  # Remove preds with zero variance
+  step_zv(all_numeric_predictors()) %>%
+  # Transform select vars using Yeo-Johnson transform
+  step_YeoJohnson(all_numeric_predictors())
+
+kdd_train_ds_baked <- kdd_model_recipe %>%
+  prep(training = kdd_train_ds,
+       verbose = TRUE) %>%
+  bake(new_data = kdd_train_ds,
+       contains('Class'),
+       contains(':'),
+       all_of(nonint_vars),
+       case_wts) %>%
+  mutate(Class = fct_relevel(Class, c('Normal', 'DoS', 'Probe', 'R2L', 'U2R')))
+
+kdd_test_baked <- kdd_model_recipe %>%
+  prep(training = kdd_train_ds) %>%
+  bake(new_data = kdd_test,
+       contains('Class'),
+       contains(':'),
+       all_of(nonint_vars)) %>%
+  mutate(Class = fct_relevel(Class, c('Normal', 'DoS', 'Probe', 'R2L', 'U2R')),
+         case_wts = 1,
+         case_wts = importance_weights(case_wts))
+
+# Make happy column names for future processes
+colnames(kdd_train_ds_baked) <- make.names(colnames(kdd_train_ds_baked))
+colnames(kdd_test_baked) <- make.names(colnames(kdd_test_baked))
+
+saveRDS(kdd_train_ds_baked, 'data/interim/kdd_train_ds_baked.RDS')
+saveRDS(kdd_test_baked, 'data/interim/kdd_test_baked.RDS')
 ```
 

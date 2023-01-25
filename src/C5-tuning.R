@@ -8,11 +8,11 @@ library(bundle)
 
 options(tidymodels.dark = TRUE)
 
-kdd_train2_ds_baked <- readRDS('data/interim/kdd_train2_ds_baked.RDS')
+kdd_train_ds_baked <- readRDS('data/interim/kdd_train_ds_baked.RDS')
 
 # Set cross-validation folds
 set.seed(4960)
-cv_folds <- vfold_cv(kdd_train2_ds_baked,
+cv_folds <- vfold_cv(kdd_train_ds_baked,
                      v = 10)
 
 C5_spec <- C5_rules(trees = tune(),
@@ -69,7 +69,7 @@ C5_final_wf <- C5_wf %>%
   finalize_workflow(C5_best_fit_params)
 
 C5_final_fit <- C5_final_wf %>%
-  fit(kdd_train2_ds_baked)
+  fit(kdd_train_ds_baked)
 
 saveRDS(C5_final_fit, 'models/tuning/C5_fit.RDS')
 

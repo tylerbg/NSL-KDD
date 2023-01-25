@@ -10,11 +10,11 @@ options(tidymodels.dark = TRUE)
 
 setwd("~/NSL-KDD")
 
-kdd_train2_ds_baked <- readRDS('data/interim/kdd_train2_ds_baked.RDS')
+kdd_train_ds_baked <- readRDS('data/interim/kdd_train_ds_baked.RDS')
 
 # Set cross-validation folds
 set.seed(4960)
-cv_folds <- vfold_cv(kdd_train2_ds_baked,
+cv_folds <- vfold_cv(kdd_train_ds_baked,
                      v = 10)
 
 knn_spec <- nearest_neighbor(neighbors = tune(),
@@ -71,7 +71,7 @@ knn_final_wf <- knn_wf %>%
   finalize_workflow(knn_best_fit_params)
 
 knn_final_fit <- knn_final_wf %>%
-  fit(kdd_train2_ds_baked)
+  fit(kdd_train_ds_baked)
 
 saveRDS(knn_final_fit, 'models/tuning/knn_fit.RDS')
 

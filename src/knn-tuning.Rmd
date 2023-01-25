@@ -1,0 +1,185 @@
+---
+title: "K-nearest neighbors"
+knit: (function(input_file, encoding) {
+  rmarkdown::render(input_file,
+    encoding=encoding,
+    output_file='~/NSL-KDD/results/knn-model.html') })
+output:
+  html_document:
+    highlight: tango
+editor_options: 
+  chunk_output_type: console
+---
+
+```{r setup, include = FALSE}
+knitr::opts_chunk$set(echo = TRUE,
+                      message = FALSE,
+                      eval = FALSE,
+                      fig.path = "results/figures/",
+                      fig.show = 'hold',
+                      fig.align = 'center')
+knitr::opts_knit$set(root.dir = '~/NSL-KDD/')
+options(width=100)
+```
+
+## Introduction
+
+K-nearest neighbors (KNN) is a supervised machine learning algorithm that can be used for both classification and regression. When given a new input, the KNN algorithm finds the k-number of training examples that are closest to the input.  The input is then classified based on the majority class of those examples. KNN models have several advantages and disadvantages:
+
+**Advantages:**
+
+- Simple and easy to implement.
+- Can be used for both classification and regression problems.
+- Computationally inexpensive and requires no training, which makes it well-suited for on-the-fly applications.
+- Robust to noisy and missing data, since it makes predictions based on the majority class of the 'k' nearest neighbors.
+- Adaptable to changes in the input space, since it is a non-parametric method.
+
+**Disadvantages:**
+
+- Sensitive to the choice of 'k'.
+- Computationally expensive in high-dimensional spaces as it requires computing the distances between all points in the training set.
+- Can be affected by the presence of irrelevant or redundant features, since all features are used in the calculation of distances.
+- Can be affected by the presence of categorical variables with many levels, since the algorithm can't handle categorical variables natively.
+
+The main issue found with the NSL-KDD data set is that even though the sample data was significantly reduced by downsampling, the KNN algorithm will still be slow compared to many other models.  However, the prediction metrics are quite good so that KNN is a very useful model for intrusion detection.
+
+## Set-up
+
+The following set of libraries will be loaded to tune and fit a KNN model on the NSL-KDD data set using `tidymodels`.  Specifically, the `kknn` library is needed for the engine to fit the KNN model.  
+
+```{r load-libs, eval = TRUE}
+library(tidyverse)
+library(tidymodels)
+library(doParallel)
+library(kknn)
+library(finetune)
+
+options(tidymodels.dark = TRUE)
+```
+
+After loading the libraries the working directory will be set and the previously baked data set loaded into the R environment. Cross-validation folds with 10 partitions will then be generated for tuning.
+
+```{r load-data, eval = TRUE}
+setwd("~/NSL-KDD")
+
+kdd_train_ds_baked <- readRDS('data/interim/kdd_train_ds_baked.RDS')
+
+set.seed(4960)
+cv_folds <- vfold_cv(kdd_train_ds_baked,
+                     v = 10)
+```
+
+### Setting parameters
+
+The next code block will set up the model.  The number of neighbors to consider (`neighbors`), type of kernel function used to weight distances between samples (`weight_func`), and value used in calculating Minkowski distance (`dist_power`) will be tuned.  The engine will be set to use the `kknn` library and the model will be set for classification.
+
+```{r model-setup}
+knn_spec <- nearest_neighbor(neighbors = tune(),
+                             weight_func = tune(),
+                             dist_power = tune()) %>% 
+  set_engine("kknn") %>% 
+  set_mode("classification") %>%
+  translate()
+```
+
+The model workflow will then be specified by adding the model parameters from above and a model formula to predict the intrusion type variable, *Class*, by all the other variables.  The `kknn` engine does not accept case weights as they are not necessary in the KNN algorithm so they will not be used.
+
+```{r knn-wf}
+knn_wf <- workflow() %>%
+  add_model(knn_spec) %>%
+  add_formula(Class ~ .)
+```
+
+Next, the ranges for the parameters to be tuned will be extracted and the control and metrics for the Bayestion tuning algorithm will be set.  The tuning algorithm is set to return four metrics: the area under the ROC curve (*roc_auc*), the proportion of true positives (*recall*), the fraction of correct predictions (*accuracy*), and the proportion of true negatives (*precision*).
+
+```{r knn-control}
+knn_param <- knn_spec %>% 
+  extract_parameter_set_dials()
+
+bayes_control <- control_bayes(verbose = TRUE,
+                               verbose_iter = TRUE,
+                               no_improve = 10)
+
+bayes_metrics <- metric_set(roc_auc,
+                            recall,
+                            accuracy,
+                            precision)
+```
+
+## Model tuning
+
+Now the model is ready for tuning.  After creating a parallel computing backend using the `doParallel` package to make a fork cluster with all of the computer cores, the `tune_bayes()` function will iterate over the cross-validation folds to tune the parameters specified above.  An initial set of 5 results will first be computed then new candidate tuning parameter combinations based on previous results using Bayesian statistics will be iterated up to a maximum of 50 iterations.
+
+```{r model-tuning}
+n_cores <- parallel::detectCores()
+
+cl <- makeForkCluster(n_cores)
+registerDoParallel(cl)
+
+set.seed(4960)
+knn_bayes <- knn_wf %>%
+  tune_bayes(resamples = cv_folds,
+             iter = 50,
+             param_info = knn_param,
+             metrics = bayes_metrics,
+             initial = 5,
+             control = bayes_control)
+
+stopImplicitCluster()
+```
+
+```{r load-prefit, echo = FALSE, eval = TRUE}
+knn_bayes <- readRDS("models/tuning/knn_bayes.RDS")
+```
+
+### Tuning assessment
+
+The `autoplot()` function will be used to visualize the results for each parameter and metric used to tune the model.  The `show_best()` function will print out the best models based on a given metric, in this case the area under the ROC curve and the proportion of true positives.
+
+```{r knn-tune-results, eval = TRUE}
+autoplot(knn_bayes) +
+  theme_bw()
+
+show_best(knn_bayes,
+          metric = 'roc_auc')
+
+show_best(knn_bayes,
+          metric = 'recall')
+```
+
+Together, most of the parameter sets did fairly well, however lower numbers of neighbors and values for calculating the Minkowski distance order are notably poorer in the area under the ROC curve metric.  The results for the models chosen by the two most important metrics, area under the ROC curve and recall, should be assessed.
+
+```{r knn-rocauc-vs-recall, eval = TRUE}
+knn_bayes %>%
+  collect_metrics() %>%
+  filter(.iter == 10)
+
+knn_bayes %>%
+  collect_metrics() %>%
+  filter(.iter == 20)
+```
+
+Notably, the best model selected by the area under the ROC metric has a relatively low recall score.  The best model selected by the recall score has good numbers for each of the metrics chosen, so it will be selected to fit the final model.
+
+## Final model fitting
+
+```{r fit-final-model}
+knn_best_fit_params <- select_best(knn_bayes,
+                                     metric = 'recall')
+
+knn_final_wf <- knn_wf %>%
+  finalize_workflow(knn_best_fit_params)
+
+knn_final_fit <- knn_final_wf %>%
+  fit(kdd_train_ds_baked)
+```
+
+### Save and clean up
+
+With a final KNN model selected and fitted, it will be saved to a `.RDS` file and the `R` environment will be cleaned up.
+
+```{r save-and-clean-up}
+saveRDS(knn_final_fit, 'models/tuning/knn_fit.RDS')
+rm(list = ls())
+gc()
+```
