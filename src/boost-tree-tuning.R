@@ -1,5 +1,6 @@
 library(tidyverse)
 library(tidymodels)
+library(doParallel)
 library(xgboost)
 library(finetune)
 library(butcher)
@@ -16,18 +17,13 @@ set.seed(4960)
 cv_folds <- vfold_cv(kdd_train2_ds_baked,
                      v = 10)
 
-# Use parallel processing within the models
-n_cores <- parallel::detectCores()
-
-# To speed up tuning and avoid errors with boost_tree, use some params selected with rand_forest
 boost_spec <- boost_tree(tree_depth = tune(),
-                         trees = 1874, # Selected from best param in rand_forest
+                         trees = tune(),
                          learn_rate = tune(),
-                         mtry = 25, # Selected from best param in rand_forest
+                         mtry = tune(),
                          min_n = 2, # Low min_n predicts U2R better without affecting other classes
                          loss_reduction = tune()) %>% 
-  set_engine("xgboost",
-             nthread = n_cores) %>% 
+  set_engine("xgboost") %>% 
   set_mode("classification") %>%
   translate()
 
@@ -39,7 +35,8 @@ boost_wf <- workflow() %>%
 
 # Extract the parameters to be used for tuning
 boost_param <- boost_spec %>% 
-  extract_parameter_set_dials()
+  extract_parameter_set_dials() %>%
+  update(mtry = mtry(c(1, ncol(kdd_train2_ds_baked) - 2)))
 
 bayes_control <- control_bayes(verbose = TRUE,
                                verbose_iter = TRUE,
@@ -55,23 +52,35 @@ bayes_metrics <- metric_set(roc_auc,
                             accuracy,
                             precision)
 
+n_cores <- parallel::detectCores()
+
+cl <- makeForkCluster(n_cores)
+registerDoParallel(cl)
+
 set.seed(6)
 boost_bayes <- boost_wf %>%
   tune_bayes(resamples = cv_folds,
              iter = 10, # Set lower than other models to avoid errors in boost_bayes
              param_info = boost_param,
              metrics = bayes_metrics,
-             initial = 5,
+             initial = 6,
              control = bayes_control)
+
+stopImplicitCluster()
 
 autoplot(boost_bayes)
 show_best(boost_bayes,
           metric = 'roc_auc')
 
-boost_bayes_butchered <- boost_bayes %>%
-  # butcher(verbose = TRUE) %>%
-  bundle()
+boost_best_fit_params <- select_best(boost_bayes,
+                                     metric = 'roc_auc')
 
-saveRDS(boost_bayes_butchered,
-        'data/interim/boost_bayes_tune.RDS')
+boost_final_wf <- boost_wf %>%
+  finalize_workflow(boost_best_fit_params)
 
+boost_final_fit <- boost_final_wf %>%
+  fit(kdd_train2_ds_baked)
+
+saveRDS(boost_final_fit, 'models/tuning/boost_fit.RDS')
+
+rm(list = ls())

@@ -9,9 +9,6 @@ options(tidymodels.dark = TRUE)
 
 kdd_train2_ds_baked <- readRDS('data/interim/kdd_train2_ds_baked.RDS')
 
-# Use make.names() to avoid 
-colnames(kdd_train2_ds_baked) <- make.names(colnames(kdd_train2_ds_baked))
-
 # Set cross-validation folds
 set.seed(4960)
 cv_folds <- vfold_cv(kdd_train2_ds_baked,
@@ -68,9 +65,15 @@ autoplot(bag_bayes)
 show_best(bag_bayes,
           metric = 'roc_auc')
 
-bag_bayes_butchered <- butcher(bag_bayes,
-                                 verbose = TRUE) %>%
-  bundle()
+bag_best_fit_params <- select_best(bag_bayes,
+                                     metric = 'roc_auc')
 
-saveRDS(bag_bayes_butchered,
-        'data/interim/bag_bayes_tune.RDS')
+bag_final_wf <- bag_wf %>%
+  finalize_workflow(bag_best_fit_params)
+
+bag_final_fit <- bag_final_wf %>%
+  fit(kdd_train2_ds_baked)
+
+saveRDS(bag_final_fit, 'models/tuning/bag_fit.RDS')
+
+rm(list = ls())

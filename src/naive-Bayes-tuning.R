@@ -11,7 +11,7 @@ options(tidymodels.dark = TRUE)
 
 setwd("~/NSL-KDD")
 
-kdd_train_baked <- readRDS('data/interim/kdd_train_baked.RDS')
+kdd_train2_ds_baked <- readRDS('data/interim/kdd_train2_ds_baked.RDS')
 
 # Set cross-validation folds
 set.seed(4960)
@@ -64,10 +64,15 @@ autoplot(nbay_bayes)
 show_best(nbay_bayes,
           metric = 'roc_auc')
 
-nbay_bayes_bundled <- nbay_bayes%>%
-  bundle()
+nbay_best_fit_params <- select_best(nbay_bayes,
+                                     metric = 'roc_auc')
 
-saveRDS(nbay_bayes_bundled,
-        'models/tuning/nbay_bayes_tune.RDS')
+nbay_final_wf <- nbay_wf %>%
+  finalize_workflow(nbay_best_fit_params)
 
+nbay_final_fit <- nbay_final_wf %>%
+  fit(kdd_train2_ds_baked)
 
+saveRDS(nbay_final_fit, 'models/tuning/nbay_fit.RDS')
+
+rm(list = ls())
