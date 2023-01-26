@@ -1,24 +1,19 @@
 #' ---
 #' title: "Multinomial regression"
-#' knit: (function(input_file, encoding) {
-#'   rmarkdown::render(input_file,
-#'                     encoding=encoding,
-#'                     output_dir='~/NSL-KDD/results/',
-#'                     output_file='multinomial.html') })
+#' author: "Tyler B. Garner, tbgarner5023@psu.edu"
 #' output:
 #'   html_document:
+#'     toc: true
+#'     toc_float: true
+#'     collapsed: false
+#'     theme: united
 #'     highlight: tango
-#' editor_options: 
-#'   chunk_output_type: console
 #' ---
 
 #+ setup, include = FALSE
 knitr::opts_chunk$set(echo = TRUE,
-                      message = FALSE,
-                      fig.path = "results/figures/",
-                      fig.show = 'hold',
-                      fig.align = 'center')
-knitr::opts_knit$set(root.dir = '~/NSL-KDD/')
+                      eval = FALSE)
+knitr::opts_knit$set(root.dir = '../')
 options(width=100)
 
 #' ## Introduction
@@ -42,10 +37,9 @@ options(width=100)
 #' 
 #' ## Set-up
 #'
-#' The following set of libraries will be loaded to tune and fit a multinomial regerssion model on the NSL-KDD data set using `tidymodels`.  Specifically, the `glmnet` library is needed for the engine to fit the multinomial model. 
+#' The following set of libraries will be loaded to tune and fit a multinomial regression model on the NSL-KDD data set using `tidymodels`.  Specifically, the `glmnet` library is needed for the engine to fit the multinomial model. 
 
-#+ load-libs
-library(tidyverse)
+#+ set-up
 library(tidymodels)
 library(doParallel)
 library(glmnet)
@@ -55,69 +49,102 @@ options(tidymodels.dark = TRUE)
 
 setwd("~/NSL-KDD")
 
-# kdd_train2_ds_baked <- readRDS('data/interim/kdd_train2_ds_baked.RDS')
-# 
-# # Set cross-validation folds
-# set.seed(4960)
-# cv_folds <- vfold_cv(kdd_train2_ds_baked,
-#                      v = 10)
-# 
-# multinom_spec <- multinom_reg(penalty = tune(),
-#                               mixture = tune()) %>% 
-#   set_engine("glmnet") %>% 
-#   set_mode("classification") %>%
-#   translate()
-# 
-# multinom_wf <- workflow() %>%
-#   add_model(multinom_spec) %>%
-#   add_formula(Class ~ .) %>%
-#   add_case_weights(case_wts)
-# 
-# multinom_param <- multinom_spec %>% 
-#   extract_parameter_set_dials()
-# 
-# bayes_control <- control_bayes(verbose = TRUE,
-#                                verbose_iter = TRUE,
-#                                no_improve = 10,
-#                                # Need both below = TRUE for stacking
-#                                save_pred = TRUE,
-#                                save_workflow = TRUE,
-#                                parallel_over = 'everything')
-# 
-# bayes_metrics <- metric_set(roc_auc,
-#                             recall,
-#                             accuracy,
-#                             precision)
-# 
-# n_cores <- parallel::detectCores()
-# 
-# cl <- makeForkCluster(n_cores)
-# registerDoParallel(cl)
-# 
-# set.seed(4960)
-# multinom_bayes <- multinom_wf %>%
-#   tune_bayes(resamples = cv_folds,
-#              iter = 50,
-#              param_info = multinom_param,
-#              metrics = bayes_metrics,
-#              initial = 5,
-#              control = bayes_control)
-# 
-# stopImplicitCluster()
-# 
-# autoplot(multinom_bayes)
-# show_best(multinom_bayes,
-#           metric = 'roc_auc')
-# 
-# multinom_best_fit_params <- select_best(multinom_bayes,
-#                                      metric = 'roc_auc')
-# 
-# multinom_final_wf <- multinom_wf %>%
-#   finalize_workflow(multinom_best_fit_params)
-# 
-# multinom_final_fit <- multinom_final_wf %>%
-#   fit(kdd_train2_ds_baked)
-# 
-# saveRDS(multinom_final_fit, 'models/tuning/multinom_fit.RDS')
-# 
-# rm(list = ls())
+kdd_train_ds_baked <- readRDS('data/interim/kdd_train_ds_baked.RDS')
+
+#' ### Cross-validation folds
+#'
+#' With the data loaded in we can set cross-validation folds, which are subsets of data used in the process of cross validation. Cross validation will be used to assess the performance of the tuned models by training them on different subsets of the data and evaluating their performance on the remaining subset of data. The data will be split into 10 folds, with each fold representing a unique subset of the data. These folds are then used in a rotation to train and test the model, with each fold being used as the test set in turn. This allows for a more robust evaluation of the model's performance and ideally reduce bias, as it is tested on multiple subsets of the data rather than just one.
+
+#+ cv-folds
+set.seed(4960)
+cv_folds <- vfold_cv(kdd_train_ds_baked,
+                     v = 10)
+
+#' ### Model specifications
+#' 
+#' Next the parameters to be tuned on, the engine to fit the model, and the mode will be set and translated for the multinomial regression algorithm in `tidymodels`.  The two parameters that will be tuned on are:
+#' 
+#' - `penalty` - the regularization parameter, &lambda;.
+#' - `mixture` - the proportion of regularization penalty to be applied, &alpha;. A value of 1 specifies a lasso model, 0 a ridge regression model, and values between an elastic net model that interpolates lasso and ridge penalties.
+
+multinom_spec <- multinom_reg(penalty = tune(),
+                              mixture = tune()) %>%
+  set_engine("glmnet") %>%
+  set_mode("classification") %>%
+  translate()
+
+#' ### Model workflow
+#' 
+#' To set up the model workflow, a workflow object will be created and the model specifications and formula will be added. Additionally, the `glmnet` engine can handle case weights, so they will be added to the model.
+
+multinom_wf <- workflow() %>%
+  add_model(multinom_spec) %>%
+  add_formula(Class ~ .) %>%
+  add_case_weights(case_wts)
+
+#' ### Tuning controls
+#' 
+#' The elements for the paramters that were set for tuning above will be extracted into a new object.  These will be used by the tuning algorithm to select viable values for those parameters.
+#' 
+#' A control argument for the tuning algorithm will also be set so that results are logged into the consol while the algorithm is running (although some of the verbage will be hidden due to the parallel back-end that will be set up prior to tuning). The tuning algorithm will also be set to end early if there are 10 consecutive iterations that do not find improvements in the model.
+#' 
+#' The area under the curve (AUC) of the Receiver Operating Characteristic (ROC), `roc_auc`, will be set as the metric to assess the fits of the tuned models. The AUC of the ROC is a measure of the model's classification performance. The AUC ranges between 0 and 1, with a value of 1 indicating perfect classification and a value of 0.5 indicating a classifier that is no better than random guessing. The AUC is a useful metric for the NSL-KDD data set because it is insensitive to the class distribution and is a good way to compare classifiers as it summarizes the trade-off between the true positive rate and the false positive rate in a single number.
+
+multinom_param <- multinom_spec %>%
+  extract_parameter_set_dials()
+
+bayes_control <- control_bayes(verbose = TRUE,
+                               verbose_iter = TRUE,
+                               no_improve = 10)
+
+bayes_metrics <- metric_set(roc_auc)
+
+#' ## Model fitting
+#' 
+#' ### Bayesian tuning
+#' 
+#' To tune the parameters of the multinomial model, a Bayesian optimization of the hyperparameters will be employed. Bayesian optimization is a method for global optimization of a function, it is particularly useful for optimizing the hyperparameters of a model because it can find the optimal set of parameters by iteratively exploring the parameter space. The `tune_bayes()` function uses a Gaussian process model to approximate the function that maps from the hyperparameter space to the performance metric, and it uses this model to guide the search for the optimal set of hyperparameters.
+#' 
+#' After setting a parallel back-end using all of the available cores, the Bayesian tuning algorithm will run over the cross-validation folds.  The `tune_bayes()` algorithm will first gather 5 initial results, then run up to 50 iterations.
+
+n_cores <- parallel::detectCores()
+
+cl <- makeForkCluster(n_cores)
+registerDoParallel(cl)
+
+set.seed(4960)
+multinom_bayes <- multinom_wf %>%
+  tune_bayes(resamples = cv_folds,
+             iter = 50,
+             param_info = multinom_param,
+             metrics = bayes_metrics,
+             initial = 5,
+             control = bayes_control)
+
+stopImplicitCluster()
+
+#' ### Tuning results
+
+autoplot(multinom_bayes)
+show_best(multinom_bayes,
+          metric = 'roc_auc')
+
+#' ### Select and fit final model
+#'
+#' The model with the highest `roc_auc` will be selected as the best model and saved as an `R` object for ensembling.
+
+multinom_best_fit_params <- select_best(multinom_bayes,
+                                        metric = 'roc_auc')
+
+multinom_final_wf <- multinom_wf %>%
+  finalize_workflow(multinom_best_fit_params)
+
+multinom_final_fit <- multinom_final_wf %>%
+  fit(kdd_train_ds_baked)
+
+saveRDS(multinom_final_fit, 'models/tuning/multinom_fit.RDS')
+
+#' After saving the model, the `R` environment will be cleaned followed by garbage collection to free unused memory.
+
+rm(list = ls())
+gc()

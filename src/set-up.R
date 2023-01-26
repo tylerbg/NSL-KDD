@@ -1,26 +1,41 @@
-# Set Up -------------------------------------------------------------------------------------------
+#' ---
+#' title: "Set-up"
+#' author: "Tyler B. Garner, tbgarner5023@psu.edu"
+#' output:
+#'   html_document:
+#'     toc: true
+#'     toc_float: true
+#'     collapsed: false
+#'     theme: united
+#'     highlight: tango
+#' ---
 
-setwd("~/NSL-KDD")
+#+ setup, include = FALSE
+knitr::opts_chunk$set(echo = TRUE,
+                      eval = FALSE)
+knitr::opts_knit$set(root.dir = '../')
+options(width=100)
 
-# Install all of the packages used in this analysis if not already installed
-libs <- c('tidyverse', 'tidymodels', 'butcher', 'stacks', 'bundle', 'ranger', 'xgboost', 'kknn',
-          'baguette', 'finetune', 'doParallel', 'rules', 'naivebayes', 'dbarts', 'rpart', 'discrim',
-          'glmnet', 'LiblineaR', 'mda')
+#' 
+#' The NSL-KDD (Network Security Laboratory - Knowledge Discovery and Data Mining) dataset is a dataset for intrusion detection systems (IDS). It was created by modifying the KDD Cup 1999 dataset, which was a dataset for network-based intrusion detection systems, to make it more representative of modern intrusions. The data set includes normal connections and a variety of different types of attacks that include:
+#' 
+#' - **Denial of Service (DoS).** These attacks are designed to make a network or system unavailable to legitimate users by overwhelming it with traffic or otherwise disrupting its normal operation.
+#' - **Probe.** These attacks are designed to gather information about a network or system, such as attempting to find open ports or identify vulnerabilities.
+#' - **Remote to Local (R2L).** These attacks involve unauthorized access to a system, such as guessing a password or using stolen credentials, with the goal of gaining local access to the system.
+#' - **User to Root (U2R).** These attacks involve unauthorized access to a system, such as hacking or exploiting a vulnerability, with the goal of gaining full control of the system.
+#' 
+#' This script will set-up the NSL-KDD dataset for exploratory data analysis (EDA) by combinging the split data sets and adding missing features. 
 
-n_cores <- parallel::detectCores()
+source('src/scripts/do_packages.R')
 
-new.packages <- libs[!(libs %in% installed.packages()[, "Package"])]
-if(length(new.packages)) install.packages(new.packages,
-                                          Ncpus = n_cores)
+libs <- c('tidyverse')
+do_packages(libs)
 
-# Set up data
-library(tidyverse)
-library(tidymodels)
+#' Both the KDDTrain+ and KDDTest+ data sets will be read into `R`. These raw data files do not include the variables names, so an external data file that includes the variable names and other features will be imported.
+#' 
+#' The data sets will then be merged so that there is one object that includes all of the KDDTrain+ and KDDTest+ data. The variable names will be assigned to that data set after replacing white space with '.' to be more syntactically valid. The '.' is used to differentiate from later steps that create dummy variables using '_'.
 
-# tidymodels_prefer()
-options(tidymodels.dark = TRUE)
-
-# Load the standard NSL-KDD training and testing sets
+#+ load-data
 kdd_train <- read_csv('data/raw/KDDTrain+.txt',
                       col_names = FALSE,
                       show_col_types = FALSE)
@@ -32,7 +47,6 @@ kdd_test <- read_csv('data/raw/KDDTest+.txt',
 kdd_features <- read_csv('data/external/KDD-features.csv',
                          show_col_types = FALSE)
 
-# Merge the train+ and test+ sets
 kdd <- rbind(kdd_train, kdd_test)
 
 # Replace whitespace in the column names with '.'
@@ -40,26 +54,10 @@ kdd <- rbind(kdd_train, kdd_test)
 colnames(kdd) <- kdd_features$`Feature Name` %>%
   str_replace_all('\\s', '.')
 
-# Get information on the data
-dim(kdd)
-head(kdd)
-summary(kdd)
+#' The NSL-KDD data sets included names of the attacks, however lacks a variable to classify them as one of the four attack types as listed above, or even a variable to classify normal versus attack connections. These variables will be created here.
 
-# Count the number of unique observations for each character variable
-kdd %>%
-  select(where(is.character)) %>%
-  apply(2, function(x) length(unique(x)))
-
-# Convert all character variables to factors and remove `Num Outbound Cmds` which is only 0's
-# Convert select numeric vars to integer
-kdd <- kdd %>%
-  mutate(across(where(is.character), factor),
-         across(c(Land:Urgent, `Num.Failed.Logins`, `Logged.In`, `Root.Shell`, `Su.Attempted`,
-                  `Num.File.Creations`:`Is.Guest.Login`), as.integer)) %>%
-  select(!`Num.Outbound.Cmds`)
-
-# Create a new column that categorizes each sub-class into either DoS, Probe, U2R, or R2L
-## Write labels
+#+ attack-classes
+# Write labels
 dos_class <- c('apache2', 'back', 'land', 'neptune', 'mailbomb', 'pod', 'processtable', 'smurf',
                'teardrop', 'udpstorm', 'worm')
 probe_class <- c('ipsweep', 'mscan', 'nmap', 'portsweep', 'saint', 'satan')
@@ -74,70 +72,17 @@ kdd <- kdd %>%
                            Subclass %in% probe_class ~ 'Probe',
                            Subclass %in% u2r_class ~ 'U2R')) %>%
   replace_na(list(Class = 'R2L')) %>%
+  # Set 'Normal' as the first factor
   mutate(Class = fct_relevel(Class, 'Normal'))
 
 # Create new variable, Type, that identifies whether the connection is normal or an attack
 kdd <- kdd %>%
   mutate(Type = factor(ifelse(Class == 'Normal', 'Normal', 'Attack')))
 
+#' The data set is now ready for EDA and other analyses, so will be saved as an `R` object to easily load and employ in later scripts. The `R` environment and unused memory will be cleaned.
 
-# Split training data for feature eng/selection
-set.seed(4960)
-kdd_train_test_split <- initial_split(kdd,
-                                      prop = 0.5)
+#+ save
+saveRDS(kdd, 'data/interim/kdd.RDS')
 
-kdd_train_val <- training(kdd_train_test_split)
-kdd_test <- testing(kdd_train_test_split)
-
-set.seed(4960)
-kdd_train_val_split <- initial_split(kdd_train_val,
-                                     prop = 4/5)
-
-kdd_train <- training(kdd_train_val_split)
-kdd_val <- testing(kdd_train_val_split)
-
-# Downsample Normal, DoS, and Probe vars so that they are 50:1 to U2R
-samp_factr <- 50
-
-set.seed(4960)
-kdd_train_ds <- kdd_train[-sample(which(kdd_train$Class == 'Normal'),
-                                  sum(kdd_train$Class == 'Normal') -
-                                    samp_factr * sum(kdd_train$Class == 'U2R')), ]
-kdd_train_ds <- kdd_train_ds[-sample(which(kdd_train_ds$Class == 'DoS'),
-                                     sum(kdd_train$Class == 'DoS') -
-                                       samp_factr * sum(kdd_train$Class == 'U2R')), ]
-kdd_train_ds <- kdd_train_ds[-sample(which(kdd_train_ds$Class == 'Probe'),
-                                     sum(kdd_train$Class == 'Probe') -
-                                       samp_factr * sum(kdd_train$Class == 'U2R')), ]
-# Calculate downsampling factors
-ds_fac_Normal <- sum(kdd_train$Class == 'Normal') / sum(kdd_train_ds$Class == 'Normal')
-ds_fac_DoS <- sum(kdd_train$Class == 'DoS') / sum(kdd_train_ds$Class == 'DoS')
-ds_fac_Probe <- sum(kdd_train$Class == 'Probe') / sum(kdd_train_ds$Class == 'Probe')
-
-# Calculate case weights
-# Add weight to the downsample classes so that:
-# Example weight = original weight * downsampling factor
-n_samples <- nrow(kdd_train_ds)
-n_classes <- length(unique(kdd_train_ds$Class))
-case_wts <- kdd_train_ds %>%
-  group_by(Class) %>%
-  summarize(n_samples_j = n(),
-            case_wts = n_samples / (n_classes * n_samples_j))
-
-kdd_train_ds_wts <- kdd_train_ds %>%
-  select(Class) %>%
-  mutate(case_wts = case_when(Class == 'Normal' ~ case_wts$case_wts[1] * ds_fac_Normal,
-                              Class == 'DoS' ~ case_wts$case_wts[2] * ds_fac_DoS,
-                              Class == 'Probe' ~ case_wts$case_wts[3] * ds_fac_Probe,
-                              Class == 'R2L' ~ case_wts$case_wts[4],
-                              Class == 'U2R' ~ case_wts$case_wts[5]),
-         case_wts = importance_weights(case_wts))
-
-kdd_train_ds <- kdd_train_ds %>%
-  cbind(kdd_train_ds_wts %>%
-          select(case_wts))
-
-saveRDS(kdd_train, 'data/interim/kdd_train.RDS')
-saveRDS(kdd_train_ds, 'data/interim/kdd_train_ds.RDS')
-saveRDS(kdd_val, 'data/interim/kdd_val.RDS')
-saveRDS(kdd_test, 'data/interim/kdd_test.RDS')
+rm(list = ls())
+gc()
