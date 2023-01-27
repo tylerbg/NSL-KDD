@@ -39,18 +39,11 @@ kdd <- readRDS('data/interim/kdd.RDS')
 
 #+ split
 set.seed(4960)
-kdd_train_test_split <- initial_split(kdd,
-                                      prop = 0.5)
+kdd_split <- initial_split(kdd,
+                           prop = 0.5)
 
-kdd_train_val <- training(kdd_train_test_split)
-kdd_test <- testing(kdd_train_test_split)
-
-set.seed(4960)
-kdd_train_val_split <- initial_split(kdd_train_val,
-                                     prop = 4/5)
-
-kdd_train <- training(kdd_train_val_split)
-kdd_val <- testing(kdd_train_val_split)
+kdd_train <- training(kdd_split)
+kdd_test <- testing(kdd_split)
 
 #' ## Downsampling
 #' 
@@ -146,30 +139,69 @@ kdd_featEng_recipe <- kdd_train_ds %>%
 
 #+ boosted-tree
 # Get the number of available cores to use in parallel with xgboost
-n_cores <- parallel::detectCores()
+# Set cross-validation folds
+set.seed(4960)
+cv_folds <- vfold_cv(kdd_train_ds,
+                     v = 10)
 
-bt_model <- boost_tree(mtry = 300,
-                       trees = 200,
-                       min_n = 2,
-                       tree_depth = 10,
-                       learn_rate = 0.2) %>%
-  set_engine('xgboost',
-             nthread = n_cores) %>%
-  set_mode('classification') %>%
+bt_spec <- boost_tree(tree_depth = tune(),
+                         trees = tune(),
+                         learn_rate = tune(),
+                         mtry = tune(),
+                         min_n = 2, # Low min_n predicts U2R better without affecting other classes
+                         loss_reduction = tune()) %>% 
+  set_engine("xgboost") %>% 
+  set_mode("classification") %>%
   translate()
 
+# Set the workflow and include pre-specified case weights
 bt_wf <- workflow() %>%
-  add_model(bt_model) %>%
-  add_recipe(kdd_featEng_recipe) %>%
+  add_model(bt_spec) %>%
+  add_formula(Class ~ .) %>%
   add_case_weights(case_wts)
 
-set.seed(4960)
-bt_fit <- bt_wf %>%
-  fit(kdd_train_ds)
+# Extract the parameters to be used for tuning
+bt_param <- bt_spec %>% 
+  extract_parameter_set_dials() %>%
+  update(mtry = mtry(c(1, ncol(kdd_train_ds) - 2)))
 
-#' ### Model assessment
-#' 
-#' 
+bayes_control <- control_bayes(verbose = TRUE,
+                               verbose_iter = TRUE,
+                               no_improve = 10)
+
+# bayes_control <- control_stacks_bayes()
+
+bayes_metrics <- metric_set(roc_auc)
+
+n_cores <- parallel::detectCores()
+
+cl <- makeForkCluster(n_cores)
+registerDoParallel(cl)
+
+set.seed(6)
+bt_bayes <- bt_wf %>%
+  tune_bayes(resamples = cv_folds,
+             iter = 10, # Set lower than other models to avoid errors in bt_bayes
+             param_info = bt_param,
+             metrics = bayes_metrics,
+             initial = 6,
+             control = bayes_control)
+
+stopImplicitCluster()
+
+autoplot(bt_bayes)
+show_best(bt_bayes,
+          metric = 'roc_auc')
+
+bt_best_fit_params <- select_best(bt_bayes,
+                                     metric = 'roc_auc')
+
+bt_final_wf <- bt_wf %>%
+  finalize_workflow(bt_best_fit_params)
+
+bt_final_fit <- bt_final_wf %>%
+  fit(kdd_train2_ds_baked)
+
 
 bt_probs <- predict(bt_fit,
                     new_data = kdd_val,
@@ -196,10 +228,10 @@ accuracy_vec(bt_results$obs,
              bt_results$pred)
 
 recall_vec(bt_results$obs,
-             bt_results$pred)
+           bt_results$pred)
 
 precision_vec(bt_results$obs,
-             bt_results$pred)
+              bt_results$pred)
 
 #' ### Variable selection
 #' 
@@ -244,14 +276,14 @@ samp_factr <- 50
 
 set.seed(4960)
 kdd_train2_ds <- kdd_train2[-sample(which(kdd_train2$Class == 'Normal'),
-                                  sum(kdd_train2$Class == 'Normal') -
-                                    samp_factr * sum(kdd_train2$Class == 'U2R')), ]
+                                    sum(kdd_train2$Class == 'Normal') -
+                                      samp_factr * sum(kdd_train2$Class == 'U2R')), ]
 kdd_train2_ds <- kdd_train2_ds[-sample(which(kdd_train2_ds$Class == 'DoS'),
-                                     sum(kdd_train2$Class == 'DoS') -
-                                       samp_factr * sum(kdd_train2$Class == 'U2R')), ]
+                                       sum(kdd_train2$Class == 'DoS') -
+                                         samp_factr * sum(kdd_train2$Class == 'U2R')), ]
 kdd_train2_ds <- kdd_train2_ds[-sample(which(kdd_train2_ds$Class == 'Probe'),
-                                     sum(kdd_train2$Class == 'Probe') -
-                                       samp_factr * sum(kdd_train2$Class == 'U2R')), ]
+                                       sum(kdd_train2$Class == 'Probe') -
+                                         samp_factr * sum(kdd_train2$Class == 'U2R')), ]
 
 # Calculate new case weights
 n_samples <- nrow(kdd_train2_ds)
