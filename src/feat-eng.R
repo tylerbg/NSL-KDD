@@ -12,7 +12,9 @@
 
 #+ setup, include = FALSE
 knitr::opts_chunk$set(echo = TRUE,
-                      eval = FALSE)
+                      eval = TRUE,
+                      messages = FALSE,
+                      warnings = FALSE)
 knitr::opts_knit$set(root.dir = '../')
 options(width=100)
 
@@ -180,7 +182,7 @@ bt_fit <- bt_wf %>%
 
 #' ### Model assessment
 #' 
-#' 
+#' To check that the boosted tree model had a good fit, predictions on the validation set will be made. The confusions matrix and statistics on the prediction accuracy, recall, and precision will be printed.
 
 #+ bt-preds
 bt_probs <- predict(bt_fit,
@@ -214,14 +216,25 @@ recall_vec(bt_results$obs,
 precision_vec(bt_results$obs,
              bt_results$pred)
 
+#' Overall the model did well predicting on the validation set, with an accuracy, recall, and precision of 0.989, 0.900, and 0.875, respectively. Additionally, the confusion matrix shows that the model was decent with its predictions for each of the 5 connection types. Therefore, the features gathered from the model are likely to be related to the connections types and useful to include in other models.
+#' 
 #' ### Variable selection
 #' 
-#' 
+#' To get an idea of what the important variables look like a plot of the top 20 variables will be printed.
 
+#+ vip
 bt_fit %>%
   extract_fit_parsnip() %>%
-  vip(num_features = 20)
+  vip(num_features = 20) +
+  theme_classic()
 
+#' Most of the top variables are interaction terms, of which most include one of the splines of *Src.Bytes* and *Dst.Bytes*. The *Dst.Host.Diff.Srv* also shows up commonly in the top interaction terms. This suggests that these variables are important predictors of connection classes. However, these variables are likely to be highly correlated as they come from the same sources, which we may need to take into account for models adversely affected by multicollinearity.
+#' 
+#' Next, the variables scored to have at least 0.1% importance will be collected. The variables that are interaction terms will be put into a formula to be used when creating the interactions in future recipes. This will greatly increase the speed of the recipes as only the select interaction terms will be generated rather than all possible terms.
+#' 
+#' Important variables that are not interaction terms will be separately collected and used to filter out unselected variables at the end of the recipe.
+
+#+ vi-select
 # Select vars with at least 0.1% importance
 imp_vars <- bt_fit %>%
   extract_fit_parsnip() %>%
@@ -229,69 +242,61 @@ imp_vars <- bt_fit %>%
   filter(Importance > 0.001)
 
 # Identify the significant interactions and create a formula
-# This will be used to reduce the processing of baking the test30 and train70 data sets by limiting
-# the number of interactions
-
 imp_vars_ints <- imp_vars$Variable[imp_vars$Variable %>%
                                      str_detect(':')]
 
 imp_vars_ints_formula <- as.formula(paste('~ ', paste(imp_vars_ints, collapse = '+')))
 
-nonint_vars <- imp_vars$Variable[!imp_vars$Variable %>% str_detect(':')]
+nonint_vars <- imp_vars$Variable[!imp_vars$Variable %>%
+                                   str_detect(':')]
 
-# Write a model formula predicting Class with all of the important variables
-# This will be used to select only the important features to include in the upcoming model
-imp_vars_formula <- as.formula(paste('Class ~', paste(imp_vars$Variable, collapse = ' + ')))
-
-
+#' To note, there are 143 variables selected as having at least 0.1% importance in the boosted tree model.
+#' 
 #' ## Engineering and selecting final features
 #'
-#'
-
-# Merge training and validation sets
-kdd_train2 <- bind_rows(kdd_train,
-                        kdd_val)
+#' Next, the full training, which includes the training and validation sets for the boosted tree model above, will similarly be downsampled, which will provide more *R2L* and *U2R* observations.
 
 # Downsample Normal, DoS, and Probe vars so that they are 50:1 to U2R
 samp_factr <- 50
 
 set.seed(4960)
-kdd_train2_ds <- kdd_train2[-sample(which(kdd_train2$Class == 'Normal'),
-                                  sum(kdd_train2$Class == 'Normal') -
-                                    samp_factr * sum(kdd_train2$Class == 'U2R')), ]
-kdd_train2_ds <- kdd_train2_ds[-sample(which(kdd_train2_ds$Class == 'DoS'),
-                                     sum(kdd_train2$Class == 'DoS') -
-                                       samp_factr * sum(kdd_train2$Class == 'U2R')), ]
-kdd_train2_ds <- kdd_train2_ds[-sample(which(kdd_train2_ds$Class == 'Probe'),
-                                     sum(kdd_train2$Class == 'Probe') -
-                                       samp_factr * sum(kdd_train2$Class == 'U2R')), ]
+kdd_train_val_ds <- kdd_train_val[-sample(which(kdd_train_val$Class == 'Normal'),
+                                  sum(kdd_train_val$Class == 'Normal') -
+                                    samp_factr * sum(kdd_train_val$Class == 'U2R')), ]
+kdd_train_val_ds <- kdd_train_val_ds[-sample(which(kdd_train_val_ds$Class == 'DoS'),
+                                     sum(kdd_train_val$Class == 'DoS') -
+                                       samp_factr * sum(kdd_train_val$Class == 'U2R')), ]
+kdd_train_val_ds <- kdd_train_val_ds[-sample(which(kdd_train_val_ds$Class == 'Probe'),
+                                     sum(kdd_train_val$Class == 'Probe') -
+                                       samp_factr * sum(kdd_train_val$Class == 'U2R')), ]
 
 # Calculate new case weights
-n_samples <- nrow(kdd_train2_ds)
-n_classes <- length(unique(kdd_train2_ds$Class))
-case_wts <- kdd_train2_ds %>%
+n_samples <- nrow(kdd_train_val_ds)
+n_classes <- length(unique(kdd_train_val_ds$Class))
+case_wts <- kdd_train_val_ds %>%
   group_by(Class) %>%
   summarize(n_samples_j = n(),
             case_wts = n_samples / (n_classes * n_samples_j))
 
 # Calculate downsampling factors
-ds_fac_Normal <- sum(kdd_train2$Class == 'Normal') / sum(kdd_train2_ds$Class == 'Normal')
-ds_fac_DoS <- sum(kdd_train2$Class == 'DoS') / sum(kdd_train2_ds$Class == 'DoS')
-ds_fac_Probe <- sum(kdd_train2$Class == 'Probe') / sum(kdd_train2_ds$Class == 'Probe')
+ds_fac_Normal <- sum(kdd_train_val$Class == 'Normal') / sum(kdd_train_val_ds$Class == 'Normal')
+ds_fac_DoS <- sum(kdd_train_val$Class == 'DoS') / sum(kdd_train_val_ds$Class == 'DoS')
+ds_fac_Probe <- sum(kdd_train_val$Class == 'Probe') / sum(kdd_train_val_ds$Class == 'Probe')
 
-kdd_train2_ds_wts <- kdd_train2_ds %>%
-  select(Class) %>%
-  mutate(case_wts = case_when(Class == 'Normal' ~ case_wts$case_wts[1] * ds_fac_Normal,
-                              Class == 'DoS' ~ case_wts$case_wts[2] * ds_fac_DoS,
-                              Class == 'Probe' ~ case_wts$case_wts[3] * ds_fac_Probe,
-                              Class == 'R2L' ~ case_wts$case_wts[4],
-                              Class == 'U2R' ~ case_wts$case_wts[5]),
-         case_wts = importance_weights(case_wts))
+case_wts$case_wts[1] <- case_wts$case_wts[1] * ds_fac_Normal
+case_wts$case_wts[2] <- case_wts$case_wts[2] * ds_fac_DoS
+case_wts$case_wts[3] <- case_wts$case_wts[3] * ds_fac_Probe
 
-kdd_train2_ds <- kdd_train2_ds %>%
-  bind_cols(case_wts = kdd_train2_ds_wts$case_wts)
+# Join case weights to downsampled training set and set as importance_weights type
+kdd_train_val_ds <- kdd_train_val_ds %>%
+  left_join(case_wts %>%
+              select(Class, case_wts),
+            by = 'Class') %>%
+  mutate(case_wts = importance_weights(case_wts))
 
-# Create new dfs with select vars ------------------------------------------------------------------
+#' The downsampled training set will then be engineered to contain the variables selected from the boosted tree model. The training set used for the boosted tree model will be used to create the recipe so that the same transformations that were modeled are applied. The testing set will similarly be engineered.
+
+#+ final-recipe
 kdd_model_recipe <- kdd_train_ds %>%
   recipe(Class ~ .) %>%
   # Remove non-predictor vars
@@ -302,7 +307,7 @@ kdd_model_recipe <- kdd_train_ds %>%
              other = 'step_other') %>%
   # Create natural spline expansions of select vars with a df of 5
   step_ns(Duration, Src.Bytes, Dst.Bytes, Num.Compromised, Num.Root, Count, Srv.Count,
-          deg_free = 5) %>%
+          deg_free = 10) %>%
   # Make dummy vars for the nominal preds but keep the original vars
   step_dummy(all_nominal_predictors(),
              one_hot = TRUE) %>%
@@ -314,10 +319,11 @@ kdd_model_recipe <- kdd_train_ds %>%
   # Transform select vars using Yeo-Johnson transform
   step_YeoJohnson(all_numeric_predictors())
 
-kdd_train2_ds_baked <- kdd_model_recipe %>%
+# Apply the recipe and select only important variables for the training then testing sets
+kdd_train_val_ds_baked <- kdd_model_recipe %>%
   prep(training = kdd_train_ds,
        verbose = TRUE) %>%
-  bake(new_data = kdd_train2_ds,
+  bake(new_data = kdd_train_val_ds,
        contains('Class'),
        contains(':'),
        all_of(nonint_vars),
@@ -334,10 +340,15 @@ kdd_test_baked <- kdd_model_recipe %>%
          case_wts = 1,
          case_wts = importance_weights(case_wts))
 
+#' Some functions have specific restraints on the characters used in variable names, in this case the colons (':') can cause issues. So, the variable names will be modified, then both the training and testing sets will be saved as `R` objects and are ready for modeling. The environment will then be cleaned to free up space.
+
+#+ save
 # Make happy column names for future processes
-colnames(kdd_train2_ds_baked) <- make.names(colnames(kdd_train2_ds_baked))
+colnames(kdd_train_val_ds_baked) <- make.names(colnames(kdd_train_val_ds_baked))
 colnames(kdd_test_baked) <- make.names(colnames(kdd_test_baked))
 
-saveRDS(kdd_train2_ds_baked, 'data/interim/kdd_train2_ds_baked.RDS')
+saveRDS(kdd_train_val_ds_baked, 'data/interim/kdd_train_ds_baked.RDS')
 saveRDS(kdd_test_baked, 'data/interim/kdd_test_baked.RDS')
 
+rm(list = ls())
+gc()
