@@ -28,7 +28,7 @@ options(width=100)
 #+ libs
 source('src/scripts/do_packages.R')
 
-libs <- c('tidyverse', 'tidymodels', 'vip')
+libs <- c('xgboost', 'tidyverse', 'tidymodels', 'vip')
 do_packages(libs)
 
 kdd <- readRDS('data/interim/kdd.RDS')
@@ -72,10 +72,13 @@ kdd_train_ds <- kdd_train_ds[-sample(which(kdd_train_ds$Class == 'DoS'),
 kdd_train_ds <- kdd_train_ds[-sample(which(kdd_train_ds$Class == 'Probe'),
                                      sum(kdd_train$Class == 'Probe') -
                                        samp_factr * sum(kdd_train$Class == 'U2R')), ]
+
+
 # Calculate downsampling factors
 ds_fac_Normal <- sum(kdd_train$Class == 'Normal') / sum(kdd_train_ds$Class == 'Normal')
 ds_fac_DoS <- sum(kdd_train$Class == 'DoS') / sum(kdd_train_ds$Class == 'DoS')
 ds_fac_Probe <- sum(kdd_train$Class == 'Probe') / sum(kdd_train_ds$Class == 'Probe')
+
 
 # Calculate case weights
 # Add weight to the downsample classes so that:
@@ -100,10 +103,21 @@ kdd_train_ds <- kdd_train_ds %>%
   cbind(kdd_train_ds_wts %>%
           select(case_wts))
 
-# Create recipe
-# Create dummy vars for all factors
-# Add interactions for all predictors
-# Remove predictors with zero variance
+#' ## Random forest variable selection
+#' 
+#' ### Feature engineering
+#' 
+#' With the training set semi-balanced it is set for selecting features. First, a recipe will be written for the random forest model to perform all of the feature engineering steps. These steps are:
+#' 
+#' 1. Removing variables that will not be used in modeling
+#' 2. Pooling values that occur less than 1% in factor variables
+#' 3. Creating natural spline expansions for select continuous variables up to a degree of 10
+#' 4. Making dummy variables for factor variables
+#' 5. Adding 2-way interactions between all variables
+#' 6. Removing variables with zero variance
+#' 7. Performing a Yeo-Johnson transformation to normalize the predictor variables
+
+#+ recipe
 kdd_featEng_recipe <- kdd_train_ds %>%
   recipe(Class ~ .) %>%
   # Remove non-predictor vars
@@ -126,17 +140,24 @@ kdd_featEng_recipe <- kdd_train_ds %>%
   # Transform select vars using Yeo-Johnson transform
   step_YeoJohnson(all_numeric_predictors())
 
-## Boosted Trees -----------------------------------------------------------------------------------
+#' ### Boosted tree classification
+#' 
+#' Boosted tree classification is an ensemble machine learning technique that combines multiple decision trees to improve the accuracy of the model. The technique uses a technique called boosting, which iteratively trains decision trees and adjusts the weights of the data points so that the model focuses more on the misclassified points in the previous tree. The final output of the model is a combination of the predictions of all the trees, where each tree is assigned a weight based on its accuracy.
+#' 
+#' The boosted tree model used for this variable selection has been 'soft-tuned', in that it will not be tuned over a grid or using a specific algorithm but instead a few hyperparameters were tested and the best selected based on some criteria. For example, the `min_n` hyperparameter, which indicates the maximum number of data points in a node required for splitting, is set to `2` as it performes the best for correctly classifying *U2R* intrusions. 
+
+#+ boosted-tree
+# Get the number of available cores to use in parallel with xgboost
 n_cores <- parallel::detectCores()
 
-bt_model <- boost_tree(mode = 'classification',
-                       mtry = 300,
+bt_model <- boost_tree(mtry = 300,
                        trees = 200,
                        min_n = 2,
                        tree_depth = 10,
                        learn_rate = 0.2) %>%
   set_engine('xgboost',
              nthread = n_cores) %>%
+  set_mode('classification') %>%
   translate()
 
 bt_wf <- workflow() %>%
@@ -147,6 +168,10 @@ bt_wf <- workflow() %>%
 set.seed(4960)
 bt_fit <- bt_wf %>%
   fit(kdd_train_ds)
+
+#' ### Model assessment
+#' 
+#' 
 
 bt_probs <- predict(bt_fit,
                     new_data = kdd_val,
@@ -178,6 +203,10 @@ recall_vec(bt_results$obs,
 precision_vec(bt_results$obs,
              bt_results$pred)
 
+#' ### Variable selection
+#' 
+#' 
+
 bt_fit %>%
   extract_fit_parsnip() %>%
   vip(num_features = 20)
@@ -187,7 +216,6 @@ imp_vars <- bt_fit %>%
   extract_fit_parsnip() %>%
   vi() %>%
   filter(Importance > 0.001)
-
 
 # Identify the significant interactions and create a formula
 # This will be used to reduce the processing of baking the test30 and train70 data sets by limiting
@@ -203,6 +231,11 @@ nonint_vars <- imp_vars$Variable[!imp_vars$Variable %>% str_detect(':')]
 # Write a model formula predicting Class with all of the important variables
 # This will be used to select only the important features to include in the upcoming model
 imp_vars_formula <- as.formula(paste('Class ~', paste(imp_vars$Variable, collapse = ' + ')))
+
+
+#' ## Engineering and selecting final features
+#'
+#'
 
 # Merge training and validation sets
 kdd_train2 <- bind_rows(kdd_train,
