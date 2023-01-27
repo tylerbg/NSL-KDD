@@ -24,17 +24,15 @@ options(width=100)
 #' 
 #' #### Advantages
 #' 
-#' - **Reduces overfitting.** By averaging the predictions of multiple decision trees, bagged tree regression can reduce the variance of a single decision tree model and improve the generalization performance.
-#' **Increases robustness.** Bagged tree regression is less sensitive to noise and outliers in the data than a single decision tree model.
-#' **Simple to implement.** The method is easy to implement and does not require any complex tuning of parameters.
-#' 
-#' **Disadvantages**
+#' - Can reduce the variance of a single decision tree model and improve the generalization performance by averaging the predictions of multiple decision trees.
+#' - Less sensitive to noise and outliers in the data than a single decision tree model.
+#' - Easy to implement and does not require any complex tuning of parameters.
 #' 
 #' #### Disadvantages
 #' 
-#' **Computationally expensive.** Bagged tree regression requires training multiple decision trees, which can be computationally expensive, especially with large datasets.
-#' **Limited interpretability.** The final predictions are made by averaging the predictions of multiple decision trees, which can make it difficult to interpret the individual contributions of each tree.
-#' **Limited to decision trees.** Bagged tree regression can only be used with decision tree models, which may not be the best choice for all types of data or problems.
+#' - Requires training multiple decision trees, which can be computationally expensive, especially with large datasets.
+#' - Can be difficult to interpret the invidual contributions of each tree as the final predictions are made by averaging the predictions of multiple decision trees.
+#' - Can only be used with decision tree models, which may not be the best choice for all types of data or problems.
 #' 
 #' 
 #' 
