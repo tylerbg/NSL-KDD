@@ -1,10 +1,45 @@
-library(tidyverse)
-library(tidymodels)
-library(doParallel)
-library(rules)
-library(finetune)
-library(butcher)
-library(bundle)
+#' ---
+#' title: "C5.0 rule-based model"
+#' author: "Tyler B. Garner, tbgarner5023@psu.edu"
+#' output:
+#'   html_document:
+#'     toc: true
+#'     toc_float: true
+#'     collapsed: false
+#'     theme: united
+#'     highlight: tango
+#' ---
+
+#+ setup, include = FALSE
+knitr::opts_chunk$set(echo = TRUE,
+                      eval = TRUE)
+knitr::opts_knit$set(root.dir = '../')
+options(width=100)
+
+#' ## Introduction
+#' 
+#' C5.0 is a decision tree-based machine learning algorithm that uses a set of if-then rules to make predictions for classification tasks. It is an improved version of the C4.5 algorithm and is designed to handle large datasets and continuous as well as categorical variables. C5.0 generates a set of if-then rules that can be used to make predictions on new data. It is a rule-based model because it generates a set of rules that can be used to classify new data.
+#' 
+#' #### Advantages
+#' - Relatively easy to interpret and understand, making them useful for explaining the reasoning behind a model's predictions.
+#' - Handles both continuous and categorical variables, making them versatile for a wide range of data types.
+#' - Relatively fast to train and use, making them suitable for large datasets.
+#' 
+#' ### Disadvantages
+#' 
+#' - Prone to overfitting, especially when the tree is deep and complex.
+#' - Sensitive to small changes in the data, which can lead to instability in the model.
+#' - May not work well with high-dimensional data, as the tree can become too complex to interpret.
+#' - May not be able to capture complex relationships between variables, which can lead to lower accuracy.
+#' - May not be as accurate as other machine learning algorithms such as Random Forest or Neural Networks in certain applications.
+#' 
+#' ## Set-up
+
+#+ libs
+source('src/scripts/do_packages.R')
+
+libs <- c('rules', 'doParallel', 'tidymodels', 'finetune')
+do_packages(libs)
 
 options(tidymodels.dark = TRUE)
 
@@ -74,3 +109,4 @@ C5_final_fit <- C5_final_wf %>%
 saveRDS(C5_final_fit, 'models/tuning/C5_fit.RDS')
 
 rm(list = ls())
+gc()

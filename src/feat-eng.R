@@ -9,21 +9,22 @@
 #'     theme: united
 #'     highlight: tango
 #' ---
-#' 
+
+#+ setup, include = FALSE
+knitr::opts_chunk$set(echo = TRUE,
+                      eval = FALSE)
+knitr::opts_knit$set(root.dir = '../')
+options(width=100)
+
 #' ## Introduction
 #' 
 #' Feature engineering is the process of creating new features or transforming existing features from raw data to improve the performance of machine learning models. It typically involves selecting, combining, and transforming variables to create new features that better represent the underlying problem and increase the model's ability to learn from the data. This can include techniques like one-hot encoding, normalization, and feature scaling.
 #' 
-#' Due to the large size of the NSL-KDD dataset, downsampling and case weights will be used to increase the speed and accuracy of the models. After, multiple feature engineering approaches will be employed that include centering and scaling, creating dummy variables, splining, and adding interaction variables. These methods will greatly increase the total number of variables in the dataset, so a random forest will be used to rank variables by importance, and a subset of 'important' variables will be selected for modeling.
-
-#+ setup, include = FALSE
-knitr::opts_chunk$set(echo = TRUE,
-                      eval = TRUE)
-knitr::opts_knit$set(root.dir = '../')
-options(width=100)
-
-
+#' Due to the large size of the NSL-KDD dataset and the significant imbalance of connection class types, downsampling and case weights will be used to increase the speed and accuracy of the models. Multiple feature engineering approaches will then be employed which include centering and scaling, creating dummy variables, creating splines, and adding interaction terms. These methods will greatly increase the total number of variables in the dataset, so a random forest will be used to rank variables by importance, and a subset of 'important' variables will be selected for modeling.
+#' 
 #' ## Set-up
+#' 
+#' First, all of the `R` packages required for the following code will be installed if not already installed and loaded. The NSL-KDD `R` object created in the 'set-up.R' source file will be then be loaded.
 
 #+ libs
 source('src/scripts/do_packages.R')
@@ -35,9 +36,10 @@ kdd <- readRDS('data/interim/kdd.RDS')
 
 #' ### Split data
 #'
-#' Prior to any feature engineering steps, the full KDD dataset will be split into new training and testing sets that each contain 50% of the data. A validation set will also be split from the training set at a 20:80 ratio which will be used to assess the random forest model during feature selection. This set will be reintegrated after feature selection so that the whole (but still downsampled) training dataset is used for modeling. Once the features are selected, the training and testing sets will be modified to contain those predictor variables.
+#' Prior to any feature engineering steps, the full NSL-KDD dataset will be split into new training and testing sets that each contain 50% of the data. A validation set will also be split from the training set at a 20:80 ratio which will be used to assess the random forest model during feature selection. This set will be reintegrated after feature selection so that the whole (but still downsampled) training dataset is used for modeling. Once the features are selected, the training and testing sets will be modified to contain those predictor variables.
 
 #+ split
+# Split the training and testing sets for modeling
 set.seed(4960)
 kdd_train_test_split <- initial_split(kdd,
                                       prop = 0.5)
@@ -45,6 +47,7 @@ kdd_train_test_split <- initial_split(kdd,
 kdd_train_val <- training(kdd_train_test_split)
 kdd_test <- testing(kdd_train_test_split)
 
+# Split the training and validation sets for feature selection
 set.seed(4960)
 kdd_train_val_split <- initial_split(kdd_train_val,
                                      prop = 4/5)
@@ -60,6 +63,7 @@ kdd_val <- testing(kdd_train_val_split)
 #' 
 #' The training set will be downsampled based on the *Class* variable so that no variable has a greater than 50:1 ratio with the *U2R* attack classification. After downsampling, downsampling factors will be calculated that will be used to modify the weights of those variables during modeling.
 
+#+ down-sample
 samp_factr <- 50
 
 set.seed(4960)
@@ -88,20 +92,27 @@ case_wts <- kdd_train_ds %>%
   summarize(n_samples_j = n(),
             case_wts = n_samples / (n_classes * n_samples_j))
 
-kdd_train_ds_wts <- kdd_train_ds %>%
-  select(Class) %>%
-  mutate(case_wts = case_when(Class == 'Normal' ~ case_wts$case_wts[1] * ds_fac_Normal,
-                              Class == 'DoS' ~ case_wts$case_wts[2] * ds_fac_DoS,
-                              Class == 'Probe' ~ case_wts$case_wts[3] * ds_fac_Probe,
-                              Class == 'R2L' ~ case_wts$case_wts[4],
-                              Class == 'U2R' ~ case_wts$case_wts[5]),
-         case_wts = importance_weights(case_wts))
+case_wts$case_wts[1] <- case_wts$case_wts[1] * ds_fac_Normal
+case_wts$case_wts[2] <- case_wts$case_wts[2] * ds_fac_DoS
+case_wts$case_wts[3] <- case_wts$case_wts[3] * ds_fac_Probe
 
+# Join case weights to downsampled training set and set as importance_weights type
 kdd_train_ds <- kdd_train_ds %>%
-  cbind(kdd_train_ds_wts %>%
-          select(case_wts))
+  left_join(case_wts %>%
+              select(Class, case_wts),
+            by = 'Class') %>%
+  mutate(case_wts = importance_weights(case_wts))
 
-#' ## Random forest variable selection
+#' ## Boosted random forest variable selection
+#' 
+#' Variable selection is the process of selecting a subset of relevant variables for use in building a predictive model. The goal is to select a subset of variables that maximizes the model's performance while minimizing the complexity of the model. This can be done using various techniques such as stepwise selection, LASSO, Ridge regression, etc. For this analysis, a boosted random forest model will be used to select features based on their 'importance'.
+#' 
+#' In the context of random forests, feature importance refers to the measure of how much each feature contributes to the prediction of the target variable. Random forests provide two ways to measure feature importance:
+#' 
+#' 1. Mean Decrease in Impurity (MDI): It measures the decrease in node impurities (e.g. Gini impurity) when a feature is used to split the data at each tree node. The higher the MDI, the more important the feature is.
+#' 2. Mean Decrease in Accuracy (MDA): It measures the decrease in accuracy when a feature is permuted (randomly re-ordered) in out-of-bag samples. The higher the MDA, the more important the feature is.
+#' 
+#' Both MDI and MDA are computed for each feature and then the feature importance score is the average of the MDI or MDA across all the decision trees in the forest. The features with an importance score of at least 0.1% will be selected for modeling.
 #' 
 #' ### Feature engineering
 #' 
@@ -113,7 +124,7 @@ kdd_train_ds <- kdd_train_ds %>%
 #' 4. Making dummy variables for factor variables
 #' 5. Adding 2-way interactions between all variables
 #' 6. Removing variables with zero variance
-#' 7. Performing a Yeo-Johnson transformation to normalize the predictor variables
+#' 7. Performing a Yeo-Johnson transformation to normalize the predictor 
 
 #+ recipe
 kdd_featEng_recipe <- kdd_train_ds %>%
@@ -171,6 +182,7 @@ bt_fit <- bt_wf %>%
 #' 
 #' 
 
+#+ bt-preds
 bt_probs <- predict(bt_fit,
                     new_data = kdd_val,
                     type = 'prob')
@@ -179,6 +191,7 @@ bt_preds <- names(bt_probs)[max.col(bt_probs,
                                     ties.method = "first")] %>%
   str_remove('\\.pred_')
 
+# Set class levels so that 'Normal' is first
 class_levels <- c("Normal", "DoS", "Probe", "R2L", "U2R")
 
 bt_results <- bind_cols(bt_probs,

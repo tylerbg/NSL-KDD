@@ -20,13 +20,13 @@ options(width=100)
 #' 
 #' Multinomial logistic regression is a type of generalized linear model (GLM) that is used to predict a categorical variable with more than two categories. It can be used to model nominal and ordinal variables and is an extension of binomial logistic regression, which is used to model binary outcomes.  Some of the advantages and disadvantages of multinomial regression include:
 #' 
-#' **Advantages:**
+#' #### Advantages
 #' 
 #' - Useful to predict nominal or ordinal dependent variables with more than two categories.
 #' - Able to test hypotheses about the relationship between the predictor variables and the dependent variable.
 #' - Can be used to estimate the relative odds of different categories, which is useful for comparing the likelihood of different outcomes.
 #' 
-#' **Disadvantages:**
+#' #### Disadvantages
 #' 
 #' - Sensitive to missing data, outliers, and multicollinearity, which can affect the estimated probabilities and coefficients.
 #' - Assumes the observations are independent, which may not be the case in certain types of data such as time series data.
@@ -40,10 +40,12 @@ options(width=100)
 #' The following set of libraries will be loaded to tune and fit a multinomial regression model on the NSL-KDD data set using `tidymodels`.  Specifically, the `glmnet` library is needed for the engine to fit the multinomial model. 
 
 #+ set-up
-library(tidymodels)
-library(doParallel)
-library(glmnet)
-library(finetune)
+source('src/scripts/do_packages.R')
+
+libs <- c('glmnet', 'doParallel', 'tidymodels', 'finetune')
+do_packages(libs)
+
+kdd <- readRDS('data/interim/kdd.RDS')
 
 options(tidymodels.dark = TRUE)
 
