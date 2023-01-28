@@ -340,6 +340,23 @@ kdd_test_baked <- kdd_model_recipe %>%
          case_wts = 1,
          case_wts = importance_weights(case_wts))
 
+#' ### Multicollinearity
+#' 
+#' One thing to check is the degree of multicollinearity in the selected variables. Since many of the variables had the same origin it would be expected that some collinearity exists, which can be problematic for some models. The Spearman correlations for the predictor variables will be calculated and a correlogram generated to observe multicollinearity.
+
+#+ correlogram
+library(corrplot)
+kdd_train_val_ds_baked %>%
+  select(!c(Class, case_wts)) %>%
+  cor(method = 'spearman') %>%
+  corrplot(method = 'square',
+           tl.pos = 'n',
+           addgrid.col = NA)
+  
+#' Although some features are nearly orthogonal to all of the other variables, there is clearly a high degree of multicollineary among a select number of features. Therefore, it might be useful to transform the data using principal components or other tools prior to fitting models that have issues with multicollinearty.
+#' 
+#' ### Save data for modeling
+#' 
 #' Some functions have specific restraints on the characters used in variable names, in this case the colons (':') can cause issues. So, the variable names will be modified, then both the training and testing sets will be saved as `R` objects and are ready for modeling. The environment will then be cleaned to free up space.
 
 #+ save

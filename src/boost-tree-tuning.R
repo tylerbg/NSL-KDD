@@ -65,7 +65,7 @@ cv_folds <- vfold_cv(kdd_train_ds_baked,
 #' - `min_n` -  the minimum number of data points in a node required for further splitting.
 #' - `tree_depth` - the maximum depth of the tree.
 #' - `learn_rate` - shrinkage parameter, or the rate at which the boosting algorithm adapts from iteration-to-iteration.
-#' - `loss_reduction` - reduction in the loss function required to split further .
+#' - `loss_reduction` - reduction in the loss function required to split furthe.
 
 #+ specs
 boost_spec <- boost_tree(mtry = tune(),
@@ -90,7 +90,7 @@ boost_wf <- workflow() %>%
 
 #' ### Tuning controls
 #' 
-#' The elements for the hyperparameters that were set for tuning above will be extracted into a new object.  These will be used by the tuning algorithm to select viable values for those parameters. The `mtry` hyperparameter must be updated to have a maximum value, which will be set to the total number of predictor variables.
+#' The elements for the parameters that were set for tuning above will be extracted into a new object.  This will be used by the tuning algorithm to select viable values for those parameters. The `mtry` parameter must be updated to have a maximum value, which will be set to the total number of predictor variables.
 #' 
 #' A control argument for the tuning algorithm will also be set so that results are logged into the console while the algorithm is running (although some of the verbage will be hidden due to the parallel back-end that will be set up prior to tuning). The tuning algorithm will also be set to end early if there are 10 consecutive iterations that do not find improvements in the model.
 #' 
@@ -112,17 +112,15 @@ bayes_control <- control_bayes(verbose = TRUE,
                                no_improve = 10)
 
 bayes_metrics <- metric_set(roc_auc,
-                            recall,
                             accuracy,
-                            precision)
+                            precision,
+                            recall)
 
-#' ## Modeling
+#' ## Tuning
 #' 
-#' ### Bayesian tuning
+#' To tune the parameters of the boosted decision tree model, a Bayesian optimization of the parameters will be employed. Bayesian optimization is a method for global optimization of a function, it is particularly useful for optimizing the parameters of a model because it can find the optimal set of parameters by iteratively exploring the parameter space. The `tune_bayes()` function uses a Gaussian process model to approximate the function that maps from the parameters space to the performance metric, and it uses this model to guide the search for the optimal set of parameters
 #' 
-#' To tune the parameters of the boosted decision tree model, a Bayesian optimization of the hyperparameters will be employed. Bayesian optimization is a method for global optimization of a function, it is particularly useful for optimizing the hyperparameters of a model because it can find the optimal set of parameters by iteratively exploring the parameter space. The `tune_bayes()` function uses a Gaussian process model to approximate the function that maps from the hyperparameter space to the performance metric, and it uses this model to guide the search for the optimal set of hyperparameters.
-#' 
-#' After setting a parallel back-end using all of the available cores, the Bayesian tuning algorithm will run over the cross-validation folds.  The `tune_bayes()` algorithm will first gather 7 initial results, then run up to 50 iterations. More initial results are gathered for this model compared to other models as there are more hyperparameters being tuned. 
+#' After setting a parallel back-end using all of the available cores, the Bayesian tuning algorithm will run over the cross-validation folds.  The `tune_bayes()` algorithm will first gather 7 initial results (one more than the total number of parameters to be tuned on), then run up to a maximum of 50 iterations. The tuning algorithm is set to end early if there is no improvement in the ROC-AUC score after 10 iterations.
 
 #+ bayes-tune
 n_cores <- parallel::detectCores()
@@ -143,7 +141,7 @@ stopImplicitCluster()
 
 #' ### Tuning assessment
 #' 
-#' To assess the tuning procedure, a plot of the tuning results for the hyperparameters and the top models by each of the four parameters, ROC AUC, accuracy, recall, and precision, will be printed.
+#' To assess the tuning procedure, a plot of the tuning results for the hyperparameters and the top models by each of the four metrics, ROC AUC, accuracy, precision, and recall, will be printed.
 
 #+ tune-assess
 png('results/figures/boost-tree-tuning-results.png')

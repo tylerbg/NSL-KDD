@@ -102,7 +102,10 @@ bayes_control <- control_bayes(verbose = TRUE,
                                verbose_iter = TRUE,
                                no_improve = 10)
 
-bayes_metrics <- metric_set(roc_auc)
+bayes_metrics <- metric_set(roc_auc,
+                            accuracy,
+                            precision,
+                            recall)
 
 #' ## Model fitting
 #' 

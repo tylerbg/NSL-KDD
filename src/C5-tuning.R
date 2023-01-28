@@ -97,8 +97,8 @@ bayes_control <- control_bayes(verbose = TRUE,
 
 bayes_metrics <- metric_set(roc_auc,
                             accuracy,
-                            recall,
-                            precision)
+                            precision,
+                            recall)
 
 #' ## Modeling
 #' 
