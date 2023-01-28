@@ -34,8 +34,8 @@ options(width=100)
 #' - May not be as accurate as other machine learning algorithms such as Random Forest or Neural Networks in certain applications.
 #' 
 #' ## Set-up
-#' First, all of the `R` packages required for the following code will be installed if not already installed and loaded. The `rules` package has the C5.0 engine that is required to fit the model with `tidymodels`. The `doParallel` package will provide tools to create a parallel backend and the `finetune` package provides tools for model tuning.
-#' 
+#' First, all of the `R` packages required for the following code will be installed if not already installed and loaded. The `rules` package has the "C5.0" engine that is required to fit the C5.0 rules fit model with `tidymodels`. The `doParallel` package will provide tools to create a parallel backend and the `finetune` package provides tools for model tuning.
+
 #+ libs
 source('src/scripts/do_packages.R')
 
@@ -51,7 +51,6 @@ options(tidymodels.dark = TRUE)
 #+ cv-folds
 kdd_train_ds_baked <- readRDS('data/interim/kdd_train_ds_baked.RDS')
 
-# Set cross-validation folds
 set.seed(4960)
 cv_folds <- vfold_cv(kdd_train_ds_baked,
                      v = 10)
@@ -72,7 +71,7 @@ C5_spec <- C5_rules(trees = tune(),
 
 #' ### Model workflow
 #' 
-#' To set up the model workflow, a workflow object will be created and the model specifications and formula will be added. Additionally, the `rules` engine can handle case weights, so they will be added to the model.
+#' To set up the model workflow, a workflow object will be created and the model specifications and formula will be added. Additionally, the "C5.0" engine can handle case weights, so they will be added to the model.
 
 #+ wf
 C5_wf <- workflow() %>%
@@ -84,7 +83,7 @@ C5_wf <- workflow() %>%
 #' 
 #' The elements for the paramters that were set for tuning above will be extracted into a new object.  These will be used by the tuning algorithm to select viable values for those parameters.
 #' 
-#' A control argument for the tuning algorithm will also be set so that results are logged into the consol while the algorithm is running (although some of the verbage will be hidden due to the parallel back-end that will be set up prior to tuning). The tuning algorithm will also be set to end early if there are 10 consecutive iterations that do not find improvements in the model.
+#' A control argument for the tuning algorithm will also be set so that results are logged into the console while the algorithm is running (although some of the verbage will be hidden due to the parallel back-end that will be set up prior to tuning). The tuning algorithm will also be set to end early if there are 10 consecutive iterations that do not find improvements in the model.
 #' 
 #' The area under the curve (AUC) of the Receiver Operating Characteristic (ROC), `roc_auc`, will be set as the metric to assess the fits of the tuned models. The AUC of the ROC is a measure of the model's classification performance. The AUC ranges between 0 and 1, with a value of 1 indicating perfect classification and a value of 0.5 indicating a classifier that is no better than random guessing. The AUC is a useful metric for the NSL-KDD data set because it is insensitive to the class distribution and is a good way to compare classifiers as it summarizes the trade-off between the true positive rate and the false positive rate in a single number.
 
@@ -96,9 +95,12 @@ bayes_control <- control_bayes(verbose = TRUE,
                                verbose_iter = TRUE,
                                no_improve = 10)
 
-bayes_metrics <- metric_set(roc_auc)
+bayes_metrics <- metric_set(roc_auc,
+                            accuracy,
+                            recall,
+                            precision)
 
-#' ## Model fitting
+#' ## Modeling
 #' 
 #' ### Bayesian tuning
 #' 
@@ -125,15 +127,24 @@ stopImplicitCluster()
 
 #' ### Tuning assessment
 #' 
-#' 
+#' To assess the tuning procedure, a plot of the tuning results for the hyperparameters and the top models by ROC AUC will be printed.
 
 #+ tune-assess
+png('results/figures/C5-tuning-results.png')
 autoplot(C5_bayes) +
   theme_bw()
+dev.off()
 
 show_best(C5_bayes,
           metric = 'roc_auc')
 
+#' In the plot, each of the metrics were all reasonably high overall. Notably, the model with the highest ROC AUC was built during the initial hyperparameter optimization, with a mean of 0.993. It may be useful to reduce the number of iterations without improvement to increase tuning speed.
+#'
+#' ## Final fit
+#' 
+#' The final model used 42 trees with a node size of 26 and will be fit and saved as an `R` object file for ensembling. The `R` environment will then be cleaned.
+
+#+ fit-final
 C5_best_fit_params <- select_best(C5_bayes,
                                      metric = 'roc_auc')
 
